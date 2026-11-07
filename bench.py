@@ -9,16 +9,18 @@ from tokenizers import Tokenizer
 
 from qwenserve.config import load_config
 from qwenserve.loader import load_weights
-from qwenserve.model import generate
+from qwenserve.model import generate_batch
 
 # Measures how fast qwenserve generates, on this machine.
 #   uv run python bench.py --model Qwen/Qwen3-0.6B
 #   uv run python bench.py --model Qwen/Qwen3-1.7B --tokens 50 --save
+#   uv run python bench.py --users 4
 
 parser = argparse.ArgumentParser()
 parser.add_argument("--model", default="Qwen/Qwen3-0.6B")
 parser.add_argument("--prompt", default="The capital of France is")
 parser.add_argument("--tokens", type=int, default=20, help="how many new tokens to generate")
+parser.add_argument("--users", type=int, default=1, help="how many users in one batch, all with the same prompt")
 parser.add_argument("--save", action="store_true", help="add the result to BENCHMARKS.md")
 args = parser.parse_args()
 
@@ -42,25 +44,27 @@ w = load_weights(args.model, c)
 load_s = time.time() - start
 
 ids = tok.encode(args.prompt).ids
-generate(ids, w, c, 1)  # warm up: the very first run is always slower
+prompts = [ids] * args.users
+generate_batch(prompts, w, c, 1)  # warm up: the very first run is always slower
 
 start = time.time()
-out = generate(ids, w, c, args.tokens)
+out = generate_batch(prompts, w, c, args.tokens)
 gen_s = time.time() - start
-tok_s = args.tokens / gen_s
+tok_s = args.users * args.tokens / gen_s  # all users together
 
 print(f"model     {args.model}")
-print(f"prompt    {len(ids)} tokens, generated {args.tokens}")
+print(f"users     {args.users}")
+print(f"prompt    {len(ids)} tokens, generated {args.tokens} each")
 print(f"load      {load_s:.1f} s")
 print(f"generate  {gen_s:.1f} s  →  {tok_s:.1f} tok/s")
-print(f"text      {tok.decode(out)!r}")
+print(f"text      {tok.decode(out[0])!r}")
 
 if args.save:
     commit = subprocess.run(["git", "rev-parse", "--short", "HEAD"], capture_output=True, text=True).stdout.strip()
     machine = cpu_name()
     row = (
         f"| {date.today()} | {commit} | {args.model} | bf16 | {machine}, {torch.get_num_threads()} threads "
-        f"| {len(ids)} | {args.tokens} | {tok_s:.1f} |\n"
+        f"| {args.users} | {len(ids)} | {args.tokens} | {tok_s:.1f} |\n"
     )
     with open("BENCHMARKS.md", "a") as f:
         f.write(row)

@@ -28,18 +28,35 @@ def rope(x, positions, theta):
     return x * cos + turned * sin
 
 
-def attention(x, w, c, i, positions, cache):
-    # x has only the new tokens, older ones are already in cache[i]
+def attention(x, w, c, i, positions, caches, counts):
+    # x has the new tokens of every user stacked: counts[0] rows for user 0, then user 1...
+    # Older tokens are already in each user's cache.
     p = f"model.layers.{i}.self_attn."
-    T, H, KV, D = x.shape[0], c.num_attention_heads, c.num_key_value_heads, c.head_dim
+    N, H, KV, D = x.shape[0], c.num_attention_heads, c.num_key_value_heads, c.head_dim
 
-    q = (x @ w[p + "q_proj.weight"].T).view(T, H, D)
-    k = (x @ w[p + "k_proj.weight"].T).view(T, KV, D)
-    v = (x @ w[p + "v_proj.weight"].T).view(T, KV, D)
+    # all users together, so each weight is read once
+    q = (x @ w[p + "q_proj.weight"].T).view(N, H, D)
+    k = (x @ w[p + "k_proj.weight"].T).view(N, KV, D)
+    v = (x @ w[p + "v_proj.weight"].T).view(N, KV, D)
 
     # new in Qwen3, Qwen2 didn't norm q and k
     q = rope(rms_norm(q, w[p + "q_norm.weight"], c.rms_norm_eps), positions, c.rope_theta)
     k = rope(rms_norm(k, w[p + "k_norm.weight"], c.rms_norm_eps), positions, c.rope_theta)
+
+    # but each user only looks at their own words, so here we go one by one
+    outs = []
+    row = 0
+    for cache, n in zip(caches, counts):
+        outs.append(attend(q[row : row + n], k[row : row + n], v[row : row + n], cache, i))
+        row += n
+    out = torch.cat(outs, dim=0)  # (N, H * D)
+    return out @ w[p + "o_proj.weight"].T
+
+
+def attend(q, k, v, cache, i):
+    # One user. q is (T, H, D), k and v are (T, KV, D) for their T new tokens.
+    T, H, D = q.shape
+    KV = k.shape[1]
 
     # KV cache: old k and v don't change, so keep them and add the new rows.
     # We store 8 kv heads here, before the repeat below, so half the memory.
@@ -67,8 +84,7 @@ def attention(x, w, c, i, positions, cache):
     scores = scores.masked_fill(future, float("-inf"))
     out = scores.softmax(dim=-1, dtype=torch.float32).to(v.dtype) @ v  # (H, T, D)
 
-    out = out.transpose(0, 1).reshape(T, H * D)  # heads back side by side
-    return out @ w[p + "o_proj.weight"].T
+    return out.transpose(0, 1).reshape(T, H * D)  # heads back side by side
 
 
 def mlp(x, w, i):

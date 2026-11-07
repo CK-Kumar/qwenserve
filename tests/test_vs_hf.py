@@ -4,7 +4,7 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 
 from qwenserve.config import load_config
 from qwenserve.loader import load_weights
-from qwenserve.model import forward, generate
+from qwenserve.model import forward, generate, generate_batch
 
 # Our engine is only right if it gives what Hugging Face gives, on the same weights.
 #
@@ -47,3 +47,12 @@ def test_same_tokens(setup, prompt):
         expected = hf.generate(ids, max_new_tokens=20, do_sample=False)[0].tolist()
     actual = generate(ids[0].tolist(), w, c, 20)
     assert actual == expected, f"\nexpected: {tok.decode(expected)!r}\nactual:   {tok.decode(actual)!r}"
+
+
+# Users of different lengths in one batch must get the same text as each alone.
+def test_batch_same_as_alone(setup):
+    tok, c, w, hf = setup
+    prompts = [tok(p).input_ids for p in PROMPTS]
+    expected = [generate(ids, w, c, 20) for ids in prompts]
+    actual = generate_batch(prompts, w, c, 20)
+    assert actual == expected
