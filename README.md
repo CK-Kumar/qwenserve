@@ -10,7 +10,7 @@ you can follow it step by step, the same way I did.
 
 ## Supported models
 
-Version 0.1 runs the Qwen3 dense models:
+Runs the Qwen3 dense models:
 
 | model | download (bf16) |
 |---|---|
@@ -26,6 +26,7 @@ Version 0.1 runs the Qwen3 dense models:
 | version | models | what's new | speed (laptop CPU, bf16) |
 |---|---|---|---|
 | 0.1 | Qwen3 dense | Loads any Qwen3 dense model and generates text. Same tokens as Hugging Face (tested on 0.6B). No KV cache yet. | 0.6B: 10.6 tok/s, 1.7B: 5.9 tok/s |
+| 0.2 | Qwen3 dense | KV cache, several users in one batch, paged KV cache (pages of 16 tokens), one attention call for all users in decode. | 0.6B: 17.1 tok/s for 1 user, 249.5 tok/s total for 64 users |
 
 ## How each version is built
 
