@@ -3,4 +3,12 @@ name = "qwenserve"
 version = "0.1.0"
 description = "qwenserve is a study project created as a simple inference engine to serve Qwen models."
 requires-python = ">=3.11"
-dependencies = []
+dependencies = [
+    "huggingface-hub>=2.4.0",
+    "safetensors>=0.8.0",
+    "torch>=2.15.0",
+]
+
+[build-system]
+requires = ["uv_build>=0.8.3,<0.9.0"]
+build-backend = "uv_build"
