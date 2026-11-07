@@ -28,9 +28,9 @@ def rope(x, positions, theta):
     return x * cos + turned * sin
 
 
-def attention(x, w, c, i, positions, caches, counts):
-    # x has the new tokens of every user stacked: counts[0] rows for user 0, then user 1...
-    # Older tokens are already in each user's cache.
+def attention(x, w, c, i, positions, pool, users, seats):
+    # x has the new tokens of every user stacked: user 0's rows, then user 1's...
+    # seats[b] says where user b's new tokens go in the pool.
     p = f"model.layers.{i}.self_attn."
     N, H, KV, D = x.shape[0], c.num_attention_heads, c.num_key_value_heads, c.head_dim
 
@@ -43,29 +43,68 @@ def attention(x, w, c, i, positions, caches, counts):
     q = rope(rms_norm(q, w[p + "q_norm.weight"], c.rms_norm_eps), positions, c.rope_theta)
     k = rope(rms_norm(k, w[p + "k_norm.weight"], c.rms_norm_eps), positions, c.rope_theta)
 
-    # but each user only looks at their own words, so here we go one by one
-    outs = []
-    row = 0
-    for cache, n in zip(caches, counts):
-        outs.append(attend(q[row : row + n], k[row : row + n], v[row : row + n], cache, i))
-        row += n
-    out = torch.cat(outs, dim=0)  # (N, H * D)
+    if all(len(seat[0]) == 1 for seat in seats):
+        # decode: everyone has exactly 1 new token, so do all users in one go
+        out = attend_decode(q, k, v, pool, users, seats, i)
+    else:
+        # prefill: each user only looks at their own words, so one by one
+        outs = []
+        row = 0
+        for user, seat in zip(users, seats):
+            n = len(seat[0])  # how many new tokens this user has
+            outs.append(attend(q[row : row + n], k[row : row + n], v[row : row + n], pool, user, seat, i))
+            row += n
+        out = torch.cat(outs, dim=0)  # (N, H * D)
     return out @ w[p + "o_proj.weight"].T
 
 
-def attend(q, k, v, cache, i):
+def attend_decode(q, k, v, pool, users, seats, i):
+    # All B users at once, 1 new token each. q is (B, H, D), k and v are (B, KV, D).
+    B, H, D = q.shape
+    KV = k.shape[1]
+
+    # write everyone's new k and v into their seats, in one go
+    pages = torch.cat([seat[0] for seat in seats])
+    slots = torch.cat([seat[1] for seat in seats])
+    pool["k"][i, pages, slots] = k
+    pool["v"][i, pages, slots] = v
+
+    # Read every user's pages. Tables have different lengths, so pad the short
+    # ones with page 0, the mask below hides whatever is in there.
+    most = max(len(u["table"]) for u in users)
+    tables = torch.tensor([u["table"] + [0] * (most - len(u["table"])) for u in users])  # (B, most)
+    k = pool["k"][i, tables].reshape(B, -1, KV, D)  # (B, L, KV, D), L = most * 16
+    v = pool["v"][i, tables].reshape(B, -1, KV, D)
+
+    group = H // KV
+    k = k.repeat_interleave(group, dim=2).transpose(1, 2)  # (B, H, L, D)
+    v = v.repeat_interleave(group, dim=2).transpose(1, 2)
+    q = q[:, :, None, :]  # (B, H, 1, D)
+
+    scores = q @ k.transpose(-2, -1) / D**0.5  # (B, H, 1, L)
+
+    # No future to hide in decode, only the padding after each user's last token.
+    lengths = torch.tensor([u["length"] for u in users])
+    padding = torch.arange(k.shape[2])[None, :] >= lengths[:, None]  # (B, L)
+    scores = scores.masked_fill(padding[:, None, None, :], float("-inf"))
+    out = scores.softmax(dim=-1, dtype=torch.float32).to(v.dtype) @ v  # (B, H, 1, D)
+    return out.reshape(B, H * D)
+
+
+def attend(q, k, v, pool, user, seat, i):
     # One user. q is (T, H, D), k and v are (T, KV, D) for their T new tokens.
     T, H, D = q.shape
     KV = k.shape[1]
 
-    # KV cache: old k and v don't change, so keep them and add the new rows.
+    # KV cache: old k and v don't change, so write the new ones into their seats
+    # and read back all of this user's pages, in order.
     # We store 8 kv heads here, before the repeat below, so half the memory.
-    if cache[i] is not None:
-        old_k, old_v = cache[i]
-        k = torch.cat([old_k, k], dim=0)
-        v = torch.cat([old_v, v], dim=0)
-    cache[i] = (k, v)
-    S = k.shape[0]  # all tokens so far
+    pages, slots = seat
+    pool["k"][i, pages, slots] = k
+    pool["v"][i, pages, slots] = v
+    S = user["length"]  # all tokens so far
+    k = pool["k"][i, user["table"]].reshape(-1, KV, D)[:S]  # last page may be half empty
+    v = pool["v"][i, user["table"]].reshape(-1, KV, D)[:S]
     start = S - T  # tokens that were already cached
 
     # GQA: each kv head is shared by H // KV query heads (2 for 0.6B, 4 for 8B)
