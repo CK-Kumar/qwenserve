@@ -12,20 +12,28 @@ you can follow it step by step, the same way I did.
 
 Version 0.1 runs the Qwen3 dense models:
 
-| model | size in bf16 |
+| model | download (bf16) |
 |---|---|
-| Qwen3-0.6B | 1.2 GB |
-| Qwen3-1.7B | 3.4 GB |
-| Qwen3-4B, Qwen3-4B-Instruct-2507 | 8 GB |
-| Qwen3-8B | 16 GB |
-| Qwen3-14B | 28 GB |
-| Qwen3-32B | 64 GB |
+| Qwen3-0.6B | 1.5 GB |
+| Qwen3-1.7B | 4.1 GB |
+| Qwen3-4B, Qwen3-4B-Instruct-2507 | 8.0 GB |
+| Qwen3-8B | 16.4 GB |
+| Qwen3-14B | 29.5 GB |
+| Qwen3-32B | 65.5 GB |
 
 ## Versions
 
-| version | models | what's new |
-|---|---|---|
-| 0.1 (in progress) | Qwen3 dense | |
+| version | models | what's new | speed (laptop CPU, bf16) |
+|---|---|---|---|
+| 0.1 | Qwen3 dense | Loads any Qwen3 dense model and generates text. Same tokens as Hugging Face (tested on 0.6B). No KV cache yet. | 0.6B: 10.6 tok/s, 1.7B: 5.9 tok/s |
+
+## How each version is built
+
+1. Add one idea (KV cache, batching, ...).
+2. Check it still gives the same tokens as Hugging Face: `uv run pytest tests`
+3. Measure it: `uv run python bench.py --model Qwen/Qwen3-0.6B --save`
+   Every run goes into [BENCHMARKS.md](BENCHMARKS.md).
+4. Tag it, so you can read any step on its own: `git checkout v0.1`
 
 ## Roadmap
 
