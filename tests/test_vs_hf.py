@@ -66,3 +66,14 @@ def test_sampling(setup):
     b = generate(ids, w, c, 10, temperature=0.7, seed=1)
     assert a == b
     assert generate(ids, w, c, 10, temperature=0.7, top_k=1) == generate(ids, w, c, 10)
+
+
+# A user who says <|im_end|> stops there, the other one goes on to the max.
+def test_stop_at_eos(setup):
+    tok, c, w, hf = setup
+    chat = "<|im_start|>user\nSay hi in one word.<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\n"
+    prompts = [tok(chat).input_ids, tok(PROMPTS[0]).input_ids]
+    short, long = generate_batch(prompts, w, c, 25)
+    assert short[-1] in c.eos_token_ids
+    assert len(short) - len(prompts[0]) < 25
+    assert len(long) - len(prompts[1]) == 25

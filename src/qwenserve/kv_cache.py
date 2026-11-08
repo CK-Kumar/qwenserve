@@ -34,3 +34,11 @@ def grow(pool, user, n):
         slots.append(user["length"] % PAGE)
         user["length"] += 1
     return torch.tensor(pages), torch.tensor(slots)
+
+
+def free(pool, user):
+    # User is done, give their pages back so a new user can take them.
+    # No need to zero them, the next owner writes over each seat before reading it.
+    pool["free"] += user["table"]
+    user["table"] = []
+    user["length"] = 0

@@ -1,6 +1,6 @@
 import torch
 
-from qwenserve.kv_cache import PAGE, grow, make_pool, new_user
+from qwenserve.kv_cache import PAGE, free, grow, make_pool, new_user
 from qwenserve.layers import attention, mlp, rms_norm
 from qwenserve.sampling import sample
 
@@ -39,8 +39,7 @@ def generate(ids, w, c, max_new_tokens, temperature=0, top_k=0, top_p=1.0, seed=
 def generate_batch(prompts, w, c, max_new_tokens, temperature=0, top_k=0, top_p=1.0, seed=None):
     # prompts is a list of token id lists, one per user.
     # temperature 0 is greedy. Same seed gives the same text.
-    # For now every user gets max_new_tokens, nobody stops early.
-    # TODO (0.3): let one user stop at eos while the others go on
+    # A user stops at eos or after max_new_tokens, the others go on.
     texts = [list(ids) for ids in prompts]  # full text per user, to return at the end
     # Sized so everyone fits, for now. A real server sizes it from free memory
     # and makes users wait when it's full (0.3).
@@ -48,19 +47,25 @@ def generate_batch(prompts, w, c, max_new_tokens, temperature=0, top_k=0, top_p=
     pool = make_pool(c, num_pages, w["model.embed_tokens.weight"].dtype)
     users = [new_user() for _ in prompts]
     new = [list(ids) for ids in prompts]  # first step sends every whole prompt (prefill)
+    running = list(range(len(prompts)))  # users still talking, by their number b
     generator = torch.Generator().manual_seed(seed) if seed is not None else None
     with torch.no_grad():
-        for _ in range(max_new_tokens):
-            counts = [len(n) for n in new]
-            flat = [t for n in new for t in n]  # all users' new tokens in one list
-            logits = forward(torch.tensor(flat), w, c, pool, users, counts)
+        while running:
+            counts = [len(new[b]) for b in running]
+            flat = [t for b in running for t in new[b]]  # running users' new tokens in one list
+            logits = forward(torch.tensor(flat), w, c, pool, [users[b] for b in running], counts)
 
             # each user's next token comes from their last row
-            new = []
+            still = []
             row = 0
-            for b, n in enumerate(counts):
+            for b, n in zip(running, counts):
                 row += n
                 next_id = sample(logits[row - 1], temperature, generator, top_k, top_p)
                 texts[b].append(next_id)
-                new.append([next_id])  # after prefill, 1 token per user
+                new[b] = [next_id]  # after prefill, 1 token per user
+                if next_id in c.eos_token_ids or len(texts[b]) - len(prompts[b]) == max_new_tokens:
+                    free(pool, users[b])
+                else:
+                    still.append(b)
+            running = still
     return texts
