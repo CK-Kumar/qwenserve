@@ -56,3 +56,13 @@ def test_batch_same_as_alone(setup):
     expected = [generate(ids, w, c, 20) for ids in prompts]
     actual = generate_batch(prompts, w, c, 20)
     assert actual == expected
+
+
+# Same seed must give the same text, and keeping only the best token is just greedy.
+def test_sampling(setup):
+    tok, c, w, hf = setup
+    ids = tok(PROMPTS[0]).input_ids
+    a = generate(ids, w, c, 10, temperature=0.7, seed=1)
+    b = generate(ids, w, c, 10, temperature=0.7, seed=1)
+    assert a == b
+    assert generate(ids, w, c, 10, temperature=0.7, top_k=1) == generate(ids, w, c, 10)

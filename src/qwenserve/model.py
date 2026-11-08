@@ -2,6 +2,7 @@ import torch
 
 from qwenserve.kv_cache import PAGE, grow, make_pool, new_user
 from qwenserve.layers import attention, mlp, rms_norm
+from qwenserve.sampling import sample
 
 
 def forward(ids, w, c, pool=None, users=None, counts=None):
@@ -30,14 +31,14 @@ def forward(ids, w, c, pool=None, users=None, counts=None):
     return x @ w["lm_head.weight"].T
 
 
-def generate(ids, w, c, max_new_tokens):
+def generate(ids, w, c, max_new_tokens, temperature=0, top_k=0, top_p=1.0, seed=None):
     # one user is just a batch of 1
-    return generate_batch([ids], w, c, max_new_tokens)[0]
+    return generate_batch([ids], w, c, max_new_tokens, temperature, top_k, top_p, seed)[0]
 
 
-def generate_batch(prompts, w, c, max_new_tokens):
+def generate_batch(prompts, w, c, max_new_tokens, temperature=0, top_k=0, top_p=1.0, seed=None):
     # prompts is a list of token id lists, one per user.
-    # Greedy: always take the highest scoring token.
+    # temperature 0 is greedy. Same seed gives the same text.
     # For now every user gets max_new_tokens, nobody stops early.
     # TODO (0.3): let one user stop at eos while the others go on
     texts = [list(ids) for ids in prompts]  # full text per user, to return at the end
@@ -47,6 +48,7 @@ def generate_batch(prompts, w, c, max_new_tokens):
     pool = make_pool(c, num_pages, w["model.embed_tokens.weight"].dtype)
     users = [new_user() for _ in prompts]
     new = [list(ids) for ids in prompts]  # first step sends every whole prompt (prefill)
+    generator = torch.Generator().manual_seed(seed) if seed is not None else None
     with torch.no_grad():
         for _ in range(max_new_tokens):
             counts = [len(n) for n in new]
@@ -58,7 +60,7 @@ def generate_batch(prompts, w, c, max_new_tokens):
             row = 0
             for b, n in enumerate(counts):
                 row += n
-                next_id = int(logits[row - 1].argmax())
+                next_id = sample(logits[row - 1], temperature, generator, top_k, top_p)
                 texts[b].append(next_id)
                 new.append([next_id])  # after prefill, 1 token per user
     return texts
