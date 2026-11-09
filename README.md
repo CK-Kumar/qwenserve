@@ -30,11 +30,26 @@ Runs the Qwen3 dense models:
 | 0.3 | Qwen3 dense | Sampling (temperature, top_k, top_p, seed). Each user stops at its own end and gives its pages back. A waiting line: users wait for a free seat and for room in the KV pool, which is sized from free RAM. A stats line every few seconds, like vLLM's. | 0.6B: 17.4 tok/s for 1 user, 297.1 tok/s total for 64 users |
 | 0.4 | Qwen3 dense | OpenAI-style server: `/v1/models`, `/v1/chat/completions`, `/v1/completions`, with streaming. Requests that come in at different times share the same steps. Tested with the official openai client. | 0.6B: 16.0 tok/s for 1 user, 256.2 tok/s total for 64 users. Through the server, 16 users at once: 106 tok/s total, first text after 0.1–0.6 s |
 
+## Install
+
+```
+uv tool install git+https://github.com/CK-Kumar/qwenserve
+```
+or with pip:
+```
+pip install git+https://github.com/CK-Kumar/qwenserve
+```
+
+On Linux, PyTorch installs its big GPU build by default. For CPU only, install it first:
+`pip install torch --index-url https://download.pytorch.org/whl/cpu`
+
 ## Run the server
 
 ```
-uv run qwenserve
+qwenserve
+qwenserve --help
 ```
+(inside a clone of this repo: `uv run qwenserve`)
 
 Any OpenAI client works with it:
 
@@ -49,7 +64,7 @@ r = client.chat.completions.create(
 print(r.choices[0].message.content)
 ```
 
-Another model or port: `uv run qwenserve --model Qwen/Qwen3-1.7B --port 8001`.
+Another model or port: `qwenserve --model Qwen/Qwen3-1.7B --port 8001`.
 At start it takes half of the free RAM for the KV cache.
 
 ## How each version is built
