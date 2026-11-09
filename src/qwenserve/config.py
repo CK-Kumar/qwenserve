@@ -20,6 +20,10 @@ class Config:
     rope_theta: float
     tie_word_embeddings: bool  # True means lm_head reuses the embedding weights
     eos_token_ids: list  # any of these means the model is done talking
+    # sampling the model makers recommend, used when a request doesn't say
+    temperature: float
+    top_p: float
+    top_k: int
 
 
 def load_config(model_name):
@@ -38,7 +42,8 @@ def load_config(model_name):
     # The stop tokens live in another file, generation_config.json.
     # Qwen3 gives two: <|im_end|> ends a chat turn, <|endoftext|> ends plain text.
     with open(hf_hub_download(model_name, "generation_config.json")) as f:
-        eos = json.load(f)["eos_token_id"]
+        gen = json.load(f)
+    eos = gen["eos_token_id"]
     if isinstance(eos, int):  # some models give just one number
         eos = [eos]
 
@@ -54,6 +59,9 @@ def load_config(model_name):
         rope_theta=raw["rope_theta"],
         tie_word_embeddings=raw["tie_word_embeddings"],
         eos_token_ids=eos,
+        temperature=gen.get("temperature", 1.0),  # if missing: plain sampling, no cut
+        top_p=gen.get("top_p", 1.0),
+        top_k=gen.get("top_k", 0),
     )
 
 
