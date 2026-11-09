@@ -43,18 +43,23 @@ def attention(x, w, c, i, positions, pool, users, seats):
     q = rope(rms_norm(q, w[p + "q_norm.weight"], c.rms_norm_eps), positions, c.rope_theta)
     k = rope(rms_norm(k, w[p + "k_norm.weight"], c.rms_norm_eps), positions, c.rope_theta)
 
-    if all(len(seat[0]) == 1 for seat in seats):
-        # decode: everyone has exactly 1 new token, so do all users in one go
-        out = attend_decode(q, k, v, pool, users, seats, i)
-    else:
-        # prefill: each user only looks at their own words, so one by one
-        outs = []
-        row = 0
-        for user, seat in zip(users, seats):
-            n = len(seat[0])  # how many new tokens this user has
-            outs.append(attend(q[row : row + n], k[row : row + n], v[row : row + n], pool, user, seat, i))
-            row += n
-        out = torch.cat(outs, dim=0)  # (N, H * D)
+    # Users with 1 new token all go in one call. Users reading a prompt go one by
+    # one, each only looks at their own words.
+    out = torch.empty(N, H * D, dtype=q.dtype)
+    rows, dec_users, dec_seats = [], [], []  # the 1-token users, collected for later
+    row = 0
+    for user, seat in zip(users, seats):
+        n = len(seat[0])  # how many new tokens this user has
+        if n == 1:
+            rows.append(row)
+            dec_users.append(user)
+            dec_seats.append(seat)
+        else:
+            out[row : row + n] = attend(q[row : row + n], k[row : row + n], v[row : row + n], pool, user, seat, i)
+        row += n
+    if rows:
+        r = torch.tensor(rows)
+        out[r] = attend_decode(q[r], k[r], v[r], pool, dec_users, dec_seats, i)
     return out @ w[p + "o_proj.weight"].T
 
 
