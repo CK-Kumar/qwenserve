@@ -40,32 +40,40 @@ def generate_batch(prompts, w, c, max_new_tokens, temperature=0, top_k=0, top_p=
     # prompts is a list of token id lists, one per user.
     # temperature 0 is greedy. Same seed gives the same text.
     # A user stops at eos or after max_new_tokens, the others go on.
-    texts = [list(ids) for ids in prompts]  # full text per user, to return at the end
     # Sized so everyone fits, for now. A real server sizes it from free memory
     # and makes users wait when it's full (0.3).
     num_pages = sum((len(ids) + max_new_tokens) // PAGE + 1 for ids in prompts)
     pool = make_pool(c, num_pages, w["model.embed_tokens.weight"].dtype)
-    users = [new_user() for _ in prompts]
-    new = [list(ids) for ids in prompts]  # first step sends every whole prompt (prefill)
-    running = list(range(len(prompts)))  # users still talking, by their number b
+    # One dict per request keeps its stuff together, so users can join and leave
+    # without lining up separate lists by number.
+    requests = [
+        {
+            "prompt": ids,
+            "text": list(ids),  # full text so far, to return at the end
+            "new": list(ids),  # first step sends the whole prompt (prefill)
+            "user": new_user(),  # their page table + length
+        }
+        for ids in prompts
+    ]
+    running = list(requests)  # requests still talking
     generator = torch.Generator().manual_seed(seed) if seed is not None else None
     with torch.no_grad():
         while running:
-            counts = [len(new[b]) for b in running]
-            flat = [t for b in running for t in new[b]]  # running users' new tokens in one list
-            logits = forward(torch.tensor(flat), w, c, pool, [users[b] for b in running], counts)
+            counts = [len(r["new"]) for r in running]
+            flat = [t for r in running for t in r["new"]]  # running users' new tokens in one list
+            logits = forward(torch.tensor(flat), w, c, pool, [r["user"] for r in running], counts)
 
-            # each user's next token comes from their last row
+            # each request's next token comes from its last row
             still = []
             row = 0
-            for b, n in zip(running, counts):
+            for r, n in zip(running, counts):
                 row += n
                 next_id = sample(logits[row - 1], temperature, generator, top_k, top_p)
-                texts[b].append(next_id)
-                new[b] = [next_id]  # after prefill, 1 token per user
-                if next_id in c.eos_token_ids or len(texts[b]) - len(prompts[b]) == max_new_tokens:
-                    free(pool, users[b])
+                r["text"].append(next_id)
+                r["new"] = [next_id]  # after prefill, 1 token per user
+                if next_id in c.eos_token_ids or len(r["text"]) - len(r["prompt"]) == max_new_tokens:
+                    free(pool, r["user"])
                 else:
-                    still.append(b)
+                    still.append(r)
             running = still
-    return texts
+    return [r["text"] for r in requests]
