@@ -15,3 +15,6 @@ Every run of `bench.py --save` adds one row. Greedy decoding. tok/s is the total
 | 2026-11-07 | 2657e4c | Qwen/Qwen3-0.6B | bf16 | AMD Ryzen 7 8845HS w/ Radeon 780M Graphics, 8 threads | 16 | 5 | 20 | 141.5 |
 | 2026-11-07 | 2657e4c | Qwen/Qwen3-0.6B | bf16 | AMD Ryzen 7 8845HS w/ Radeon 780M Graphics, 8 threads | 64 | 5 | 20 | 249.5 |
 | 2026-11-07 | 2657e4c | Qwen/Qwen3-0.6B | bf16 | AMD Ryzen 7 8845HS w/ Radeon 780M Graphics, 8 threads | 1 | 5 | 200 | 15.3 |
+| 2026-11-09 | c9d7acc | Qwen/Qwen3-0.6B | bf16 | AMD Ryzen 7 8845HS w/ Radeon 780M Graphics, 8 threads | 1 | 5 | 20 | 17.4 |
+| 2026-11-09 | c9d7acc | Qwen/Qwen3-0.6B | bf16 | AMD Ryzen 7 8845HS w/ Radeon 780M Graphics, 8 threads | 16 | 5 | 20 | 166.9 |
+| 2026-11-09 | c9d7acc | Qwen/Qwen3-0.6B | bf16 | AMD Ryzen 7 8845HS w/ Radeon 780M Graphics, 8 threads | 64 | 5 | 20 | 297.1 |
