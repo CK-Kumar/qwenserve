@@ -33,7 +33,7 @@ Runs the Qwen3 dense models:
 ## Run the server
 
 ```
-uv run uvicorn qwenserve.server:app --port 8000
+uv run qwenserve
 ```
 
 Any OpenAI client works with it:
@@ -49,7 +49,7 @@ r = client.chat.completions.create(
 print(r.choices[0].message.content)
 ```
 
-Another model: `QWENSERVE_MODEL=Qwen/Qwen3-1.7B uv run uvicorn qwenserve.server:app`.
+Another model or port: `uv run qwenserve --model Qwen/Qwen3-1.7B --port 8001`.
 At start it takes half of the free RAM for the KV cache.
 
 ## How each version is built
@@ -58,7 +58,8 @@ At start it takes half of the free RAM for the KV cache.
 2. Check it still gives the same tokens as Hugging Face: `uv run pytest tests`
 3. Measure it: `uv run python bench.py --model Qwen/Qwen3-0.6B --save`
    Every run goes into [BENCHMARKS.md](BENCHMARKS.md).
-4. Tag it, so you can read any step on its own: `git checkout v0.1`
+4. Set `version` in `pyproject.toml` to match.
+5. Tag it, so you can read any step on its own: `git checkout v0.1`
 
 ## Roadmap
 

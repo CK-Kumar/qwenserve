@@ -17,8 +17,8 @@ from qwenserve.loader import load_weights
 from qwenserve.model import make_engine, pages_needed
 
 # OpenAI-style server: /v1/models, /v1/chat/completions, /v1/completions.
-#   uv run uvicorn qwenserve.server:app --port 8000
-#   QWENSERVE_MODEL=Qwen/Qwen3-1.7B uv run uvicorn qwenserve.server:app --port 8000
+#   qwenserve --model Qwen/Qwen3-1.7B   (see cli.py)
+#   QWENSERVE_MODEL=Qwen/Qwen3-1.7B uv run uvicorn qwenserve.server:app
 
 # uvicorn imports this file, so the model comes from an env var, not a flag
 MODEL = os.environ.get("QWENSERVE_MODEL", "Qwen/Qwen3-0.6B")
