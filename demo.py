@@ -29,7 +29,7 @@ dtype = w["model.embed_tokens.weight"].dtype
 num_pages = pages_from_memory(c, dtype)  # after the weights, they take RAM too
 print(f"KV pool: {num_pages} pages ({num_pages * page_bytes(c, dtype) / 1e9:.1f} GB), {num_pages * PAGE} tokens")
 prompts = [tok.encode(chat(q)).ids for q in QUESTIONS]
-out = generate_batch(prompts, w, c, 60, max_running=2, num_pages=num_pages, log=True)
+out = generate_batch(prompts, w, c, 60, max_running=2, num_pages=num_pages, log=True, stats_every=1)
 
 print()
 for i, (q, ids, text) in enumerate(zip(QUESTIONS, prompts, out)):

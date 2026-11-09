@@ -1,3 +1,5 @@
+import time
+
 import torch
 
 from qwenserve.kv_cache import PAGE, free, grow, make_pool, new_user
@@ -36,7 +38,7 @@ def generate(ids, w, c, max_new_tokens, temperature=0, top_k=0, top_p=1.0, seed=
     return generate_batch([ids], w, c, max_new_tokens, temperature, top_k, top_p, seed)[0]
 
 
-def generate_batch(prompts, w, c, max_new_tokens, temperature=0, top_k=0, top_p=1.0, seed=None, max_running=None, num_pages=None, log=False):
+def generate_batch(prompts, w, c, max_new_tokens, temperature=0, top_k=0, top_p=1.0, seed=None, max_running=None, num_pages=None, log=False, stats_every=10):
     # prompts is a list of token id lists, one per user.
     # temperature 0 is greedy. Same seed gives the same text.
     # A user stops at eos or after max_new_tokens, the others go on.
@@ -69,6 +71,9 @@ def generate_batch(prompts, w, c, max_new_tokens, temperature=0, top_k=0, top_p=
     running = []
     generator = torch.Generator().manual_seed(seed) if seed is not None else None
     step = 0
+    # for the stats line: tokens done since the last one
+    last = time.time()
+    prompt_toks = gen_toks = 0
     with torch.no_grad():
         while running or waiting:
             step += 1
@@ -77,11 +82,9 @@ def generate_batch(prompts, w, c, max_new_tokens, temperature=0, top_k=0, top_p=
                 r = waiting.pop(0)
                 running.append(r)
                 reserved += r["need"]
+                prompt_toks += len(r["prompt"])
                 if log:
                     print(f"step {step}: user {r['id']} joins ({len(r['prompt'])} prompt tokens)")
-            if log:
-                used = num_pages - len(pool["free"])
-                print(f"step {step}: running {len(running)}, waiting {len(waiting)}, pages used {used}, reserved {reserved}/{num_pages}")
 
             counts = [len(r["new"]) for r in running]
             flat = [t for r in running for t in r["new"]]  # running users' new tokens in one list
@@ -103,5 +106,17 @@ def generate_batch(prompts, w, c, max_new_tokens, temperature=0, top_k=0, top_p=
                         print(f"step {step}: user {r['id']} done, {reason} ({len(r['text']) - len(r['prompt'])} new tokens)")
                 else:
                     still.append(r)
+            gen_toks += len(counts)  # each running user got 1 new token
             running = still
+
+            # one summary line every stats_every seconds, like vLLM's
+            secs = time.time() - last
+            if log and secs >= stats_every:
+                used = num_pages - len(pool["free"])
+                print(
+                    f"prompt {prompt_toks / secs:.1f} tok/s, generation {gen_toks / secs:.1f} tok/s, "
+                    f"running {len(running)}, waiting {len(waiting)}, KV pool {100 * used / num_pages:.1f}%"
+                )
+                last = time.time()
+                prompt_toks = gen_toks = 0
     return [r["text"] for r in requests]

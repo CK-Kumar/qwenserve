@@ -22,7 +22,7 @@ parser.add_argument("--prompt", default="The capital of France is")
 parser.add_argument("--tokens", type=int, default=20, help="how many new tokens to generate")
 parser.add_argument("--users", type=int, default=1, help="how many users in one batch, all with the same prompt")
 parser.add_argument("--max-running", type=int, default=None, help="seats: at most this many users at once, the rest wait")
-parser.add_argument("--log", action="store_true", help="print one line per step")
+parser.add_argument("--log", action="store_true", help="print who joins and leaves, and a stats line every 10 s")
 parser.add_argument("--save", action="store_true", help="add the result to BENCHMARKS.md")
 args = parser.parse_args()
 
