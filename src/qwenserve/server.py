@@ -1,4 +1,5 @@
 import os
+import queue
 import time
 import uuid
 
@@ -9,8 +10,10 @@ from tokenizers import Tokenizer
 
 from qwenserve.chat import chat_prompt
 from qwenserve.config import load_config
+from qwenserve.engine import start
+from qwenserve.kv_cache import PAGE, page_bytes, pages_from_memory
 from qwenserve.loader import load_weights
-from qwenserve.model import generate_batch
+from qwenserve.model import make_engine
 
 # An OpenAI-style chat server.
 #   uv run uvicorn qwenserve.server:app --port 8000
@@ -18,6 +21,7 @@ from qwenserve.model import generate_batch
 
 # uvicorn starts this file itself, so the model comes from an environment variable, not a flag
 MODEL = os.environ.get("QWENSERVE_MODEL", "Qwen/Qwen3-0.6B")
+MAX_RUNNING = 32  # seats: users answered at the same time, the rest wait
 
 # Load once when the server starts, not per request (takes seconds).
 # Config first: it checks the model is one we can run. On a bad model, stop with
@@ -31,6 +35,13 @@ except RepositoryNotFoundError:
 tok = Tokenizer.from_pretrained(MODEL)
 w = load_weights(MODEL, c)
 
+# One engine for the whole server, its cook runs in the background from now on.
+dtype = w["model.embed_tokens.weight"].dtype
+num_pages = pages_from_memory(c, dtype)  # after the weights, they take RAM too
+print(f"KV pool: {num_pages} pages ({num_pages * page_bytes(c, dtype) / 1e9:.1f} GB), {num_pages * PAGE} tokens, {MAX_RUNNING} seats")
+engine = make_engine(w, c, num_pages, MAX_RUNNING, log=True)
+start(engine)
+
 app = FastAPI()
 
 
@@ -41,27 +52,32 @@ async def models():
 
 
 @app.post("/v1/chat/completions")
-async def chat_completions(body: dict):
+def chat_completions(body: dict):
+    # plain def: FastAPI runs each request in its own small thread, so it can just
+    # wait at its mailbox while the others are served
     # body is the request JSON as a plain dict: {"messages": [...], "max_tokens": 100}
     if body.get("model", MODEL) != MODEL:
         # don't answer with another model than the one asked for, same error as vLLM
         message = f"The model `{body['model']}` does not exist."
         return JSONResponse({"error": {"message": message, "type": "NotFoundError", "code": 404}}, status_code=404)
     ids = tok.encode(chat_prompt(body["messages"])).ids
-    # async def + slow work here = the whole server waits until this answer is done,
-    # so only one request at a time. The background engine loop will fix that.
-    text = generate_batch(
-        [ids],
-        w,
-        c,
-        body.get("max_tokens", 256),
-        # the client's choice, else the model's own defaults, like vLLM
-        temperature=body.get("temperature", c.temperature),
-        top_k=body.get("top_k", c.top_k),
-        top_p=body.get("top_p", c.top_p),
-        seed=body.get("seed"),
-    )[0]
-    new = text[len(ids) :]
+    mailbox = queue.Queue()
+    engine["rail"].put(
+        {
+            "ids": ids,
+            "max_new_tokens": body.get("max_tokens", 256),
+            # the client's choice, else the model's own defaults, like vLLM
+            "temperature": body.get("temperature", c.temperature),
+            "top_k": body.get("top_k", c.top_k),
+            "top_p": body.get("top_p", c.top_p),
+            "seed": body.get("seed"),
+            "mailbox": mailbox,
+        }
+    )
+    r = mailbox.get()  # wait until the cook is done with this request
+    if isinstance(r, ValueError):  # it can never fit in the pool
+        return JSONResponse({"error": {"message": str(r), "type": "BadRequestError", "code": 400}}, status_code=400)
+    new = r["text"][len(ids) :]
     answer = tok.decode(new, skip_special_tokens=True)
     # ended on its own, or cut off at max_tokens
     finish_reason = "stop" if new[-1] in c.eos_token_ids else "length"

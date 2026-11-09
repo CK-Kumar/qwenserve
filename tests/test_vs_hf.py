@@ -4,7 +4,7 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 
 from qwenserve.config import load_config
 from qwenserve.loader import load_weights
-from qwenserve.model import forward, generate, generate_batch
+from qwenserve.model import add_request, forward, generate, generate_batch, make_engine, step
 
 # Our engine is only right if it gives what Hugging Face gives, on the same weights.
 #
@@ -91,3 +91,16 @@ def test_waiting_for_pages(setup):
     tok, c, w, hf = setup
     prompts = [tok(p).input_ids for p in PROMPTS[:3]]
     assert generate_batch(prompts, w, c, 10, num_pages=2) == generate_batch(prompts, w, c, 10)
+
+
+def test_own_sampling_per_request(setup):
+    # in one batch A is greedy and B samples, each must match itself alone
+    tok, c, w, hf = setup
+    a, b = tok(PROMPTS[0]).input_ids, tok(PROMPTS[1]).input_ids
+    engine = make_engine(w, c, num_pages=10, max_running=2)
+    ra = add_request(engine, a, 10)
+    rb = add_request(engine, b, 10, temperature=0.7, seed=1)
+    while engine["running"] or engine["waiting"]:
+        step(engine)
+    assert ra["text"] == generate(a, w, c, 10)
+    assert rb["text"] == generate(b, w, c, 10, temperature=0.7, seed=1)

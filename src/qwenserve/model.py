@@ -39,84 +39,127 @@ def generate(ids, w, c, max_new_tokens, temperature=0, top_k=0, top_p=1.0, seed=
 
 
 def generate_batch(prompts, w, c, max_new_tokens, temperature=0, top_k=0, top_p=1.0, seed=None, max_running=None, num_pages=None, log=False, stats_every=10):
-    # prompts is a list of token id lists, one per user.
-    # temperature 0 is greedy. Same seed gives the same text.
+    # prompts is a list of token id lists, one per user. Runs until everyone is done.
     # A user stops at eos or after max_new_tokens, the others go on.
-    # At most max_running users talk at once, the rest wait for a free seat.
-    # The pool has num_pages pages. A user also waits until their worst case fits.
-    # One dict per request keeps its stuff together, so users can join and leave
-    # without lining up separate lists by number.
-    requests = [
-        {
-            "id": i,  # only for the log
-            "prompt": ids,
-            "text": list(ids),  # full text so far, to return at the end
-            "new": list(ids),  # first step sends the whole prompt (prefill)
-            "user": new_user(),  # their page table + length
-            "need": (len(ids) + max_new_tokens) // PAGE + 1,  # pages if the answer runs to max_new_tokens
-        }
-        for i, ids in enumerate(prompts)
-    ]
     if max_running is None:
-        max_running = len(requests)  # everyone gets a seat
+        max_running = len(prompts)  # everyone gets a seat
     if num_pages is None:
-        num_pages = sum(r["need"] for r in requests)  # everyone fits
-    if max(r["need"] for r in requests) > num_pages:
-        raise ValueError("one user needs more pages than the whole pool, they would wait forever")
-    pool = make_pool(c, num_pages, w["model.embed_tokens.weight"].dtype)
-    # Pages promised to running users. They get them bit by bit as the answer
-    # grows, so we can't just count pool["free"].
-    reserved = 0
-    waiting = list(requests)  # first come, first served
-    running = []
-    generator = torch.Generator().manual_seed(seed) if seed is not None else None
-    step = 0
-    # for the stats line: tokens done since the last one
-    last = time.time()
-    prompt_toks = gen_toks = 0
-    with torch.no_grad():
-        while running or waiting:
-            step += 1
-            # fill free seats before the step, so a new user joins while others are mid-answer
-            while max_running > len(running) and waiting and reserved + waiting[0]["need"] <= num_pages:
-                r = waiting.pop(0)
-                running.append(r)
-                reserved += r["need"]
-                prompt_toks += len(r["prompt"])
-                if log:
-                    print(f"step {step}: user {r['id']} joins ({len(r['prompt'])} prompt tokens)")
-
-            counts = [len(r["new"]) for r in running]
-            flat = [t for r in running for t in r["new"]]  # running users' new tokens in one list
-            logits = forward(torch.tensor(flat), w, c, pool, [r["user"] for r in running], counts)
-
-            # each request's next token comes from its last row
-            still = []
-            row = 0
-            for r, n in zip(running, counts):
-                row += n
-                next_id = sample(logits[row - 1], temperature, generator, top_k, top_p)
-                r["text"].append(next_id)
-                r["new"] = [next_id]  # after prefill, 1 token per user
-                if next_id in c.eos_token_ids or len(r["text"]) - len(r["prompt"]) == max_new_tokens:
-                    free(pool, r["user"])
-                    reserved -= r["need"]
-                    if log:
-                        reason = "eos" if next_id in c.eos_token_ids else "length"
-                        print(f"step {step}: user {r['id']} done, {reason} ({len(r['text']) - len(r['prompt'])} new tokens)")
-                else:
-                    still.append(r)
-            gen_toks += len(counts)  # each running user got 1 new token
-            running = still
-
-            # one summary line every stats_every seconds, like vLLM's
-            secs = time.time() - last
-            if log and secs >= stats_every:
-                used = num_pages - len(pool["free"])
-                print(
-                    f"prompt {prompt_toks / secs:.1f} tok/s, generation {gen_toks / secs:.1f} tok/s, "
-                    f"running {len(running)}, waiting {len(waiting)}, KV pool {100 * used / num_pages:.1f}%"
-                )
-                last = time.time()
-                prompt_toks = gen_toks = 0
+        num_pages = sum(pages_needed(ids, max_new_tokens) for ids in prompts)  # everyone fits
+    engine = make_engine(w, c, num_pages, max_running, log, stats_every)
+    requests = [add_request(engine, ids, max_new_tokens, temperature, top_k, top_p, seed) for ids in prompts]
+    while engine["running"] or engine["waiting"]:
+        step(engine)
     return [r["text"] for r in requests]
+
+
+def pages_needed(ids, max_new_tokens):
+    # pages if the answer runs all the way to max_new_tokens
+    return (len(ids) + max_new_tokens) // PAGE + 1
+
+
+def make_engine(w, c, num_pages, max_running, log=False, stats_every=10):
+    # The kitchen, made once: one pool and two lines. Users come and go, it stays.
+    # At most max_running users talk at once, the rest wait for a free seat.
+    # A user also waits until their worst case fits in the pool.
+    return {
+        "w": w,
+        "c": c,
+        "pool": make_pool(c, num_pages, w["model.embed_tokens.weight"].dtype),
+        "num_pages": num_pages,
+        "max_running": max_running,
+        # Pages promised to running users. They get them bit by bit as the answer
+        # grows, so we can't just count pool["free"].
+        "reserved": 0,
+        "waiting": [],  # first come, first served
+        "running": [],
+        "next_id": 0,  # only for the log
+        "log": log,
+        "step": 0,
+        # for the stats line: tokens done since the last one
+        "stats_every": stats_every,
+        "last": time.time(),
+        "prompt_toks": 0,
+        "gen_toks": 0,
+    }
+
+
+def add_request(engine, ids, max_new_tokens, temperature=0, top_k=0, top_p=1.0, seed=None):
+    # Put one request in the waiting line. One dict per request keeps its stuff
+    # together, so users can join and leave without lining up lists by number.
+    r = {
+        "id": engine["next_id"],  # only for the log
+        "prompt": ids,
+        "text": list(ids),  # full text so far, to return at the end
+        "new": list(ids),  # first step sends the whole prompt (prefill)
+        "user": new_user(),  # their page table + length
+        "max_new_tokens": max_new_tokens,
+        "need": pages_needed(ids, max_new_tokens),
+        # Sampling, each request its own. temperature 0 is greedy. Its own seeded
+        # generator, so the same seed gives the same text whoever else is running.
+        "temperature": temperature,
+        "top_k": top_k,
+        "top_p": top_p,
+        "generator": torch.Generator().manual_seed(seed) if seed is not None else None,
+    }
+    if r["need"] > engine["num_pages"]:
+        raise ValueError("this request needs more pages than the whole pool, it would wait forever")
+    engine["next_id"] += 1
+    engine["waiting"].append(r)
+    return r
+
+
+def step(engine):
+    # One round: fill free seats, 1 new token for every running user, finished
+    # users out. Returns the requests that finished in this round.
+    w, c, pool, waiting, log = engine["w"], engine["c"], engine["pool"], engine["waiting"], engine["log"]
+    running = engine["running"]
+    engine["step"] += 1
+    s = engine["step"]
+
+    # fill free seats before the step, so a new user joins while others are mid-answer
+    while engine["max_running"] > len(running) and waiting and engine["reserved"] + waiting[0]["need"] <= engine["num_pages"]:
+        r = waiting.pop(0)
+        running.append(r)
+        engine["reserved"] += r["need"]
+        engine["prompt_toks"] += len(r["prompt"])
+        if log:
+            print(f"step {s}: user {r['id']} joins ({len(r['prompt'])} prompt tokens)")
+    if not running:
+        return []  # nothing to cook
+
+    counts = [len(r["new"]) for r in running]
+    flat = [t for r in running for t in r["new"]]  # running users' new tokens in one list
+    with torch.no_grad():
+        logits = forward(torch.tensor(flat), w, c, pool, [r["user"] for r in running], counts)
+
+    # each request's next token comes from its last row
+    still, finished = [], []
+    row = 0
+    for r, n in zip(running, counts):
+        row += n
+        next_id = sample(logits[row - 1], r["temperature"], r["generator"], r["top_k"], r["top_p"])
+        r["text"].append(next_id)
+        r["new"] = [next_id]  # after prefill, 1 token per user
+        if next_id in c.eos_token_ids or len(r["text"]) - len(r["prompt"]) == r["max_new_tokens"]:
+            free(pool, r["user"])
+            engine["reserved"] -= r["need"]
+            finished.append(r)
+            if log:
+                reason = "eos" if next_id in c.eos_token_ids else "length"
+                print(f"step {s}: user {r['id']} done, {reason} ({len(r['text']) - len(r['prompt'])} new tokens)")
+        else:
+            still.append(r)
+    engine["gen_toks"] += len(counts)  # each running user got 1 new token
+    engine["running"] = still
+
+    # one summary line every stats_every seconds, like vLLM's
+    secs = time.time() - engine["last"]
+    if log and secs >= engine["stats_every"]:
+        used = engine["num_pages"] - len(pool["free"])
+        print(
+            f"prompt {engine['prompt_toks'] / secs:.1f} tok/s, generation {engine['gen_toks'] / secs:.1f} tok/s, "
+            f"running {len(still)}, waiting {len(waiting)}, KV pool {100 * used / engine['num_pages']:.1f}%"
+        )
+        engine["last"] = time.time()
+        engine["prompt_toks"] = engine["gen_toks"] = 0
+    return finished
