@@ -8,8 +8,7 @@ from urllib.error import URLError
 import openai
 import pytest
 
-# Starts the real server and talks to it with the official openai client,
-# to check we really speak the same API as OpenAI and vLLM.
+# Runs the real server and checks it with the official openai client.
 
 MODEL = "Qwen/Qwen3-0.6B"
 CHAT = [{"role": "user", "content": "What is the capital of France? Just the name."}]
@@ -32,7 +31,7 @@ def client():
             break
         except URLError:
             time.sleep(1)
-    yield openai.OpenAI(base_url=url, api_key="none")  # we don't check keys
+    yield openai.OpenAI(base_url=url, api_key="none")  # no API keys here
     server.terminate()
     server.wait()
 

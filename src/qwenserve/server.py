@@ -16,18 +16,16 @@ from qwenserve.kv_cache import PAGE, page_bytes, pages_from_memory
 from qwenserve.loader import load_weights
 from qwenserve.model import make_engine, pages_needed
 
-# An OpenAI-style server: /v1/models, /v1/chat/completions and /v1/completions,
-# with or without streaming.
+# OpenAI-style server: /v1/models, /v1/chat/completions, /v1/completions.
 #   uv run uvicorn qwenserve.server:app --port 8000
 #   QWENSERVE_MODEL=Qwen/Qwen3-1.7B uv run uvicorn qwenserve.server:app --port 8000
 
-# uvicorn starts this file itself, so the model comes from an environment variable, not a flag
+# uvicorn imports this file, so the model comes from an env var, not a flag
 MODEL = os.environ.get("QWENSERVE_MODEL", "Qwen/Qwen3-0.6B")
-MAX_RUNNING = 32  # seats: users answered at the same time, the rest wait
+MAX_RUNNING = 32  # max users at once, the rest wait
 
-# Load once when the server starts, not per request (takes seconds).
-# Config first: it checks the model is one we can run. On a bad model, stop with
-# one clear line instead of a 40-line traceback.
+# Load once at start. Config first, it checks we support the model.
+# On a bad model, print one line instead of a long traceback.
 try:
     c = load_config(MODEL)
 except ValueError as e:
@@ -37,7 +35,7 @@ except RepositoryNotFoundError:
 tok = Tokenizer.from_pretrained(MODEL)
 w = load_weights(MODEL, c)
 
-# One engine for the whole server, its cook runs in the background from now on.
+# One engine for the whole server, running in the background.
 dtype = w["model.embed_tokens.weight"].dtype
 num_pages = pages_from_memory(c, dtype)  # after the weights, they take RAM too
 print(f"KV pool: {num_pages} pages ({num_pages * page_bytes(c, dtype) / 1e9:.1f} GB), {num_pages * PAGE} tokens, {MAX_RUNNING} seats")
@@ -49,15 +47,14 @@ app = FastAPI()
 
 @app.get("/v1/models")
 async def models():
-    # clients ask this first, to know which model name to send
+    # clients call this first to get the model name
     return {"object": "list", "data": [{"id": MODEL, "object": "model", "owned_by": "qwenserve"}]}
 
 
 @app.post("/v1/chat/completions")
 def chat_completions(body: dict):
-    # plain def: FastAPI runs each request in its own small thread, so it can just
-    # wait at its mailbox while the others are served
-    # body is the request JSON as a plain dict: {"messages": [...], "max_tokens": 100}
+    # plain def, not async: FastAPI runs it in its own thread, so it can wait on the mailbox
+    # body is the request JSON, e.g. {"messages": [...], "max_tokens": 100}
     ids = tok.encode(chat_prompt(body["messages"])).ids
     mailbox, err = submit(body, ids, default_max_tokens=256)
     if err:
@@ -67,7 +64,7 @@ def chat_completions(body: dict):
     if body.get("stream"):
 
         def events():
-            yield sse(chat_chunk(rid, {"role": "assistant", "content": ""}, None))  # first chunk says who talks
+            yield sse(chat_chunk(rid, {"role": "assistant", "content": ""}, None))  # first chunk only has the role
             for piece, finish_reason, n in pieces(mailbox):
                 if piece or finish_reason:
                     yield sse(chat_chunk(rid, {"content": piece} if piece else {}, finish_reason))
@@ -90,10 +87,10 @@ def chat_completions(body: dict):
 
 @app.post("/v1/completions")
 def completions(body: dict):
-    # Plain text in, plain text out: no chat template, the model just goes on
-    # from the prompt. {"prompt": "The capital of France is", "max_tokens": 5}
+    # no chat template, the model just continues the prompt
+    # body e.g. {"prompt": "The capital of France is", "max_tokens": 5}
     ids = tok.encode(body["prompt"]).ids
-    mailbox, err = submit(body, ids, default_max_tokens=16)  # 16 like OpenAI and vLLM
+    mailbox, err = submit(body, ids, default_max_tokens=16)  # 16 is the OpenAI default
     if err:
         return err
     rid = f"cmpl-{uuid.uuid4().hex}"
@@ -117,14 +114,13 @@ def completions(body: dict):
 
 
 def submit(body, ids, default_max_tokens):
-    # Check the request and put it on the rail. Returns (mailbox, None), or
-    # (None, error) if we won't run it.
+    # Checks the request and sends it to the engine.
+    # Returns (mailbox, None) or (None, error).
     if body.get("model", MODEL) != MODEL:
-        # don't answer with another model than the one asked for, same error as vLLM
+        # wrong model name, same error as vLLM
         return None, error(f"The model `{body['model']}` does not exist.", "NotFoundError", 404)
     max_new_tokens = body.get("max_tokens", default_max_tokens)
-    # Checked here and not only in the engine: once a stream has started, the
-    # status code is already sent, too late to say 400.
+    # check here: once a stream starts it's too late to return a 400
     if pages_needed(ids, max_new_tokens) > num_pages:
         return None, error("this request needs more pages than the whole pool, it would wait forever", "BadRequestError", 400)
     mailbox = queue.Queue()
@@ -132,7 +128,7 @@ def submit(body, ids, default_max_tokens):
         {
             "ids": ids,
             "max_new_tokens": max_new_tokens,
-            # the client's choice, else the model's own defaults, like vLLM
+            # request value, else the model's defaults (like vLLM)
             "temperature": body.get("temperature", c.temperature),
             "top_k": body.get("top_k", c.top_k),
             "top_p": body.get("top_p", c.top_p),
@@ -144,11 +140,10 @@ def submit(body, ids, default_max_tokens):
 
 
 def tokens(mailbox):
-    # The cook sends one (token, finish_reason) per step, finish_reason is None
-    # until the last one.
+    # one (token, finish_reason) per step, finish_reason is None until the end
     finish_reason = None
     while finish_reason is None:
-        msg = mailbox.get()  # sleeps until the cook sends something
+        msg = mailbox.get()  # waits for the engine
         if isinstance(msg, Exception):
             raise msg
         token, finish_reason = msg
@@ -156,7 +151,7 @@ def tokens(mailbox):
 
 
 def collect(mailbox):
-    # No streaming: wait for all tokens, then answer once.
+    # no streaming: wait for the whole answer
     new = []
     for token, finish_reason in tokens(mailbox):
         new.append(token)
@@ -164,8 +159,7 @@ def collect(mailbox):
 
 
 def pieces(mailbox):
-    # Streaming: (new text, finish_reason, tokens so far) per step. The text is
-    # "" while a character is only half there.
+    # streaming: new text each step, "" while a character is incomplete
     new, sent = [], ""
     for token, finish_reason in tokens(mailbox):
         new.append(token)
@@ -199,7 +193,7 @@ def usage(ids, n):
 
 
 def sse(obj):
-    # Server-Sent Events: each message is a "data: ..." line and a blank line
+    # one SSE message: "data: ..." and a blank line
     return f"data: {json.dumps(obj)}\n\n"
 
 

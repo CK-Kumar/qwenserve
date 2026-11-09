@@ -58,9 +58,8 @@ def pages_needed(ids, max_new_tokens):
 
 
 def make_engine(w, c, num_pages, max_running, log=False, stats_every=10):
-    # The kitchen, made once: one pool and two lines. Users come and go, it stays.
-    # At most max_running users talk at once, the rest wait for a free seat.
-    # A user also waits until their worst case fits in the pool.
+    # Made once: the KV pool plus the waiting and running lists.
+    # A user runs only if there is a free seat and their worst case fits.
     return {
         "w": w,
         "c": c,
@@ -84,8 +83,7 @@ def make_engine(w, c, num_pages, max_running, log=False, stats_every=10):
 
 
 def add_request(engine, ids, max_new_tokens, temperature=0, top_k=0, top_p=1.0, seed=None):
-    # Put one request in the waiting line. One dict per request keeps its stuff
-    # together, so users can join and leave without lining up lists by number.
+    # Add a request to the waiting list. One dict per request keeps its state together.
     r = {
         "id": engine["next_id"],  # only for the log
         "prompt": ids,
@@ -95,8 +93,7 @@ def add_request(engine, ids, max_new_tokens, temperature=0, top_k=0, top_p=1.0, 
         "max_new_tokens": max_new_tokens,
         "need": pages_needed(ids, max_new_tokens),
         "finish_reason": None,  # "stop" or "length" once done
-        # Sampling, each request its own. temperature 0 is greedy. Its own seeded
-        # generator, so the same seed gives the same text whoever else is running.
+        # own sampling and seed, so other users don't change this one's text (temperature 0 = greedy)
         "temperature": temperature,
         "top_k": top_k,
         "top_p": top_p,
@@ -110,8 +107,8 @@ def add_request(engine, ids, max_new_tokens, temperature=0, top_k=0, top_p=1.0, 
 
 
 def step(engine):
-    # One round: fill free seats, 1 new token for every running user, finished
-    # users out. Returns every request that got a token in this round.
+    # One step: let waiting users in, 1 new token for each running user, remove
+    # finished ones. Returns all requests that got a token.
     w, c, pool, waiting, log = engine["w"], engine["c"], engine["pool"], engine["waiting"], engine["log"]
     running = engine["running"]
     engine["step"] += 1
@@ -126,7 +123,7 @@ def step(engine):
         if log:
             print(f"step {s}: user {r['id']} joins ({len(r['prompt'])} prompt tokens)")
     if not running:
-        return []  # nothing to cook
+        return []  # nobody running
     stepped = list(running)
 
     counts = [len(r["new"]) for r in running]
