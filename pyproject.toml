@@ -1,6 +1,6 @@
 [project]
 name = "qwenserve"
-version = "0.2.0"
+version = "0.3.0"
 description = "qwenserve is a study project created as a simple inference engine to serve Qwen models."
 requires-python = ">=3.11"
 dependencies = [
