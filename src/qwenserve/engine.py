@@ -23,8 +23,9 @@ def cook(engine):
         # and take every other order that came in meanwhile
         while not rail.empty():
             take(engine, rail.get())
+        # every request gets its new token right away, so the web side can stream it
         for r in step(engine):
-            r["mailbox"].put(r)
+            r["mailbox"].put((r["text"][-1], r["finish_reason"]))
 
 
 def take(engine, order):

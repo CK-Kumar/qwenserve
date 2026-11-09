@@ -74,13 +74,17 @@ def chat_completions(body: dict):
             "mailbox": mailbox,
         }
     )
-    r = mailbox.get()  # wait until the cook is done with this request
-    if isinstance(r, ValueError):  # it can never fit in the pool
-        return JSONResponse({"error": {"message": str(r), "type": "BadRequestError", "code": 400}}, status_code=400)
-    new = r["text"][len(ids) :]
+    # The cook sends one (token, finish_reason) per step. Collect them all,
+    # finish_reason is None until the last one.
+    new = []
+    finish_reason = None
+    while finish_reason is None:
+        msg = mailbox.get()  # sleeps until the cook sends something
+        if isinstance(msg, ValueError):  # it can never fit in the pool
+            return JSONResponse({"error": {"message": str(msg), "type": "BadRequestError", "code": 400}}, status_code=400)
+        token, finish_reason = msg
+        new.append(token)
     answer = tok.decode(new, skip_special_tokens=True)
-    # ended on its own, or cut off at max_tokens
-    finish_reason = "stop" if new[-1] in c.eos_token_ids else "length"
     return {
         "id": f"chatcmpl-{uuid.uuid4().hex}",
         "object": "chat.completion",

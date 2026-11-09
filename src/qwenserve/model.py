@@ -94,6 +94,7 @@ def add_request(engine, ids, max_new_tokens, temperature=0, top_k=0, top_p=1.0, 
         "user": new_user(),  # their page table + length
         "max_new_tokens": max_new_tokens,
         "need": pages_needed(ids, max_new_tokens),
+        "finish_reason": None,  # "stop" or "length" once done
         # Sampling, each request its own. temperature 0 is greedy. Its own seeded
         # generator, so the same seed gives the same text whoever else is running.
         "temperature": temperature,
@@ -110,7 +111,7 @@ def add_request(engine, ids, max_new_tokens, temperature=0, top_k=0, top_p=1.0, 
 
 def step(engine):
     # One round: fill free seats, 1 new token for every running user, finished
-    # users out. Returns the requests that finished in this round.
+    # users out. Returns every request that got a token in this round.
     w, c, pool, waiting, log = engine["w"], engine["c"], engine["pool"], engine["waiting"], engine["log"]
     running = engine["running"]
     engine["step"] += 1
@@ -126,6 +127,7 @@ def step(engine):
             print(f"step {s}: user {r['id']} joins ({len(r['prompt'])} prompt tokens)")
     if not running:
         return []  # nothing to cook
+    stepped = list(running)
 
     counts = [len(r["new"]) for r in running]
     flat = [t for r in running for t in r["new"]]  # running users' new tokens in one list
@@ -133,7 +135,7 @@ def step(engine):
         logits = forward(torch.tensor(flat), w, c, pool, [r["user"] for r in running], counts)
 
     # each request's next token comes from its last row
-    still, finished = [], []
+    still = []
     row = 0
     for r, n in zip(running, counts):
         row += n
@@ -143,10 +145,9 @@ def step(engine):
         if next_id in c.eos_token_ids or len(r["text"]) - len(r["prompt"]) == r["max_new_tokens"]:
             free(pool, r["user"])
             engine["reserved"] -= r["need"]
-            finished.append(r)
+            r["finish_reason"] = "stop" if next_id in c.eos_token_ids else "length"
             if log:
-                reason = "eos" if next_id in c.eos_token_ids else "length"
-                print(f"step {s}: user {r['id']} done, {reason} ({len(r['text']) - len(r['prompt'])} new tokens)")
+                print(f"step {s}: user {r['id']} done, {r['finish_reason']} ({len(r['text']) - len(r['prompt'])} new tokens)")
         else:
             still.append(r)
     engine["gen_toks"] += len(counts)  # each running user got 1 new token
@@ -162,4 +163,4 @@ def step(engine):
         )
         engine["last"] = time.time()
         engine["prompt_toks"] = engine["gen_toks"] = 0
-    return finished
+    return stepped
