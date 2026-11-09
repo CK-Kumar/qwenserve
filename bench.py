@@ -21,6 +21,8 @@ parser.add_argument("--model", default="Qwen/Qwen3-0.6B")
 parser.add_argument("--prompt", default="The capital of France is")
 parser.add_argument("--tokens", type=int, default=20, help="how many new tokens to generate")
 parser.add_argument("--users", type=int, default=1, help="how many users in one batch, all with the same prompt")
+parser.add_argument("--max-running", type=int, default=None, help="seats: at most this many users at once, the rest wait")
+parser.add_argument("--log", action="store_true", help="print one line per step")
 parser.add_argument("--save", action="store_true", help="add the result to BENCHMARKS.md")
 args = parser.parse_args()
 
@@ -48,7 +50,7 @@ prompts = [ids] * args.users
 generate_batch(prompts, w, c, 1)  # warm up: the very first run is always slower
 
 start = time.time()
-out = generate_batch(prompts, w, c, args.tokens)
+out = generate_batch(prompts, w, c, args.tokens, max_running=args.max_running, log=args.log)
 gen_s = time.time() - start
 tok_s = args.users * args.tokens / gen_s  # all users together
 

@@ -1,3 +1,4 @@
+import psutil
 import torch
 
 # Paged KV cache: one big pool made once, cut into pages of 16 tokens.
@@ -14,6 +15,19 @@ def make_pool(c, num_pages, dtype):
         "v": torch.zeros(shape, dtype=dtype),
         "free": list(range(num_pages)),
     }
+
+
+def page_bytes(c, dtype):
+    # One page = 16 tokens of k and v, in every layer. Same shape as make_pool.
+    return 2 * c.num_hidden_layers * PAGE * c.num_key_value_heads * c.head_dim * dtype.itemsize
+
+
+def pages_from_memory(c, dtype, fraction=0.5):
+    # How many pages fit in a share of the RAM that is free right now.
+    # Call it after loading the weights, they take RAM too. Only half by
+    # default: on a laptop other apps need room, or the system starts swapping.
+    available = psutil.virtual_memory().available  # works on Linux, Mac and Windows
+    return int(available * fraction) // page_bytes(c, dtype)
 
 
 def new_user():

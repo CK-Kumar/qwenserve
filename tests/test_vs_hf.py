@@ -77,3 +77,17 @@ def test_stop_at_eos(setup):
     assert short[-1] in c.eos_token_ids
     assert len(short) - len(prompts[0]) < 25
     assert len(long) - len(prompts[1]) == 25
+
+
+def test_waiting_for_a_seat(setup):
+    # one seat for three users must give the same texts as everyone at once
+    tok, c, w, hf = setup
+    prompts = [tok(p).input_ids for p in PROMPTS[:3]]
+    assert generate_batch(prompts, w, c, 10, max_running=1) == generate_batch(prompts, w, c, 10)
+
+
+def test_waiting_for_pages(setup):
+    # a pool of 2 pages fits only some users at a time, texts must not change
+    tok, c, w, hf = setup
+    prompts = [tok(p).input_ids for p in PROMPTS[:3]]
+    assert generate_batch(prompts, w, c, 10, num_pages=2) == generate_batch(prompts, w, c, 10)

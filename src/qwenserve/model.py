@@ -36,29 +36,53 @@ def generate(ids, w, c, max_new_tokens, temperature=0, top_k=0, top_p=1.0, seed=
     return generate_batch([ids], w, c, max_new_tokens, temperature, top_k, top_p, seed)[0]
 
 
-def generate_batch(prompts, w, c, max_new_tokens, temperature=0, top_k=0, top_p=1.0, seed=None):
+def generate_batch(prompts, w, c, max_new_tokens, temperature=0, top_k=0, top_p=1.0, seed=None, max_running=None, num_pages=None, log=False):
     # prompts is a list of token id lists, one per user.
     # temperature 0 is greedy. Same seed gives the same text.
     # A user stops at eos or after max_new_tokens, the others go on.
-    # Sized so everyone fits, for now. A real server sizes it from free memory
-    # and makes users wait when it's full (0.3).
-    num_pages = sum((len(ids) + max_new_tokens) // PAGE + 1 for ids in prompts)
-    pool = make_pool(c, num_pages, w["model.embed_tokens.weight"].dtype)
+    # At most max_running users talk at once, the rest wait for a free seat.
+    # The pool has num_pages pages. A user also waits until their worst case fits.
     # One dict per request keeps its stuff together, so users can join and leave
     # without lining up separate lists by number.
     requests = [
         {
+            "id": i,  # only for the log
             "prompt": ids,
             "text": list(ids),  # full text so far, to return at the end
             "new": list(ids),  # first step sends the whole prompt (prefill)
             "user": new_user(),  # their page table + length
+            "need": (len(ids) + max_new_tokens) // PAGE + 1,  # pages if the answer runs to max_new_tokens
         }
-        for ids in prompts
+        for i, ids in enumerate(prompts)
     ]
-    running = list(requests)  # requests still talking
+    if max_running is None:
+        max_running = len(requests)  # everyone gets a seat
+    if num_pages is None:
+        num_pages = sum(r["need"] for r in requests)  # everyone fits
+    if max(r["need"] for r in requests) > num_pages:
+        raise ValueError("one user needs more pages than the whole pool, they would wait forever")
+    pool = make_pool(c, num_pages, w["model.embed_tokens.weight"].dtype)
+    # Pages promised to running users. They get them bit by bit as the answer
+    # grows, so we can't just count pool["free"].
+    reserved = 0
+    waiting = list(requests)  # first come, first served
+    running = []
     generator = torch.Generator().manual_seed(seed) if seed is not None else None
+    step = 0
     with torch.no_grad():
-        while running:
+        while running or waiting:
+            step += 1
+            # fill free seats before the step, so a new user joins while others are mid-answer
+            while max_running > len(running) and waiting and reserved + waiting[0]["need"] <= num_pages:
+                r = waiting.pop(0)
+                running.append(r)
+                reserved += r["need"]
+                if log:
+                    print(f"step {step}: user {r['id']} joins ({len(r['prompt'])} prompt tokens)")
+            if log:
+                used = num_pages - len(pool["free"])
+                print(f"step {step}: running {len(running)}, waiting {len(waiting)}, pages used {used}, reserved {reserved}/{num_pages}")
+
             counts = [len(r["new"]) for r in running]
             flat = [t for r in running for t in r["new"]]  # running users' new tokens in one list
             logits = forward(torch.tensor(flat), w, c, pool, [r["user"] for r in running], counts)
@@ -73,6 +97,10 @@ def generate_batch(prompts, w, c, max_new_tokens, temperature=0, top_k=0, top_p=
                 r["new"] = [next_id]  # after prefill, 1 token per user
                 if next_id in c.eos_token_ids or len(r["text"]) - len(r["prompt"]) == max_new_tokens:
                     free(pool, r["user"])
+                    reserved -= r["need"]
+                    if log:
+                        reason = "eos" if next_id in c.eos_token_ids else "length"
+                        print(f"step {step}: user {r['id']} done, {reason} ({len(r['text']) - len(r['prompt'])} new tokens)")
                 else:
                     still.append(r)
             running = still

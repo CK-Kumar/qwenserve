@@ -5,6 +5,7 @@ description = "qwenserve is a study project created as a simple inference engine
 requires-python = ">=3.11"
 dependencies = [
     "huggingface-hub>=2.4.0",
+    "psutil>=7.2.2",
     "safetensors>=0.8.0",
     "tokenizers>=0.23.3",
     "torch>=2.15.0",
