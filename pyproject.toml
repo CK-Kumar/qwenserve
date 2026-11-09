@@ -4,11 +4,13 @@ version = "0.2.0"
 description = "qwenserve is a study project created as a simple inference engine to serve Qwen models."
 requires-python = ">=3.11"
 dependencies = [
+    "fastapi>=0.162.2",
     "huggingface-hub>=2.4.0",
     "psutil>=7.2.2",
     "safetensors>=0.8.0",
     "tokenizers>=0.23.3",
     "torch>=2.15.0",
+    "uvicorn>=0.54.0",
 ]
 
 [build-system]
