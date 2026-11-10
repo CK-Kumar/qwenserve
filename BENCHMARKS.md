@@ -1,6 +1,7 @@
 # Benchmarks
 
 Every run of `bench.py --save` adds one row. Greedy decoding. tok/s is the total for all users.
+From 2026-11-10 on, tok/s is the median of 5 runs. Before that it was one run, and runs differ by about ±10%.
 
 | date | commit | model | dtype | machine | users | prompt tokens | new tokens | tok/s |
 |---|---|---|---|---|---|---|---|---|

@@ -1,5 +1,6 @@
 import argparse
 import platform
+import statistics
 import subprocess
 import time
 from datetime import date
@@ -22,6 +23,7 @@ parser.add_argument("--prompt", default="The capital of France is")
 parser.add_argument("--tokens", type=int, default=20, help="how many new tokens to generate")
 parser.add_argument("--users", type=int, default=1, help="how many users in one batch, all with the same prompt")
 parser.add_argument("--max-running", type=int, default=None, help="seats: at most this many users at once, the rest wait")
+parser.add_argument("--runs", type=int, default=5, help="repeat this many times and report the median, one run is noisy")
 parser.add_argument("--log", action="store_true", help="print who joins and leaves, and a stats line every 10 s")
 parser.add_argument("--save", action="store_true", help="add the result to BENCHMARKS.md")
 args = parser.parse_args()
@@ -49,16 +51,19 @@ ids = tok.encode(args.prompt).ids
 prompts = [ids] * args.users
 generate_batch(prompts, w, c, 1)  # warm up: the very first run is always slower
 
-start = time.time()
-out = generate_batch(prompts, w, c, args.tokens, max_running=args.max_running, log=args.log)
-gen_s = time.time() - start
-tok_s = args.users * args.tokens / gen_s  # all users together
+runs = []
+for _ in range(args.runs):
+    start = time.time()
+    out = generate_batch(prompts, w, c, args.tokens, max_running=args.max_running, log=args.log)
+    runs.append(args.users * args.tokens / (time.time() - start))  # tok/s, all users together
+tok_s = statistics.median(runs)
 
 print(f"model     {args.model}")
 print(f"users     {args.users}")
 print(f"prompt    {len(ids)} tokens, generated {args.tokens} each")
 print(f"load      {load_s:.1f} s")
-print(f"generate  {gen_s:.1f} s  →  {tok_s:.1f} tok/s")
+print(f"runs      {', '.join(f'{r:.1f}' for r in runs)} tok/s")
+print(f"generate  median {tok_s:.1f} tok/s total, {tok_s / args.users:.1f} tok/s per user")
 print(f"text      {tok.decode(out[0])!r}")
 
 if args.save:
