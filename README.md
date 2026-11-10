@@ -29,6 +29,7 @@ Runs the Qwen3 dense models:
 | 0.2 | Qwen3 dense | KV cache, several users in one batch, paged KV cache (pages of 16 tokens), one attention call for all users in decode. | 0.6B: 17.1 tok/s for 1 user, 249.5 tok/s total for 64 users |
 | 0.3 | Qwen3 dense | Sampling (temperature, top_k, top_p, seed). Each user stops at its own end and gives its pages back. A waiting line: users wait for a free seat and for room in the KV pool, which is sized from free RAM. A stats line every few seconds, like vLLM's. | 0.6B: 17.4 tok/s for 1 user, 297.1 tok/s total for 64 users |
 | 0.4 | Qwen3 dense | OpenAI-style server: `/v1/models`, `/v1/chat/completions`, `/v1/completions`, with streaming. Requests that come in at different times share the same steps. Tested with the official openai client. | 0.6B: 16.0 tok/s for 1 user, 256.2 tok/s total for 64 users. Through the server, 16 users at once: 106 tok/s total, first text after 0.1–0.6 s |
+| 0.4.1 | Qwen3 dense | Fixes: bad values (top_p 0, empty prompt, max_tokens 0) get a 400 instead of crashing the engine; if a step crashes, its users get an error and the engine keeps going; a client that leaves a stream frees its seat. Benchmarks are now the median of 5 runs. | 0.6B: 18.6 tok/s for 1 user, 250.4 tok/s total for 64 users (3.9 each). Through the server (`bench_server.py`), 16 users at once: 100.8 tok/s total, first text after 0.66 s |
 
 ## Install
 

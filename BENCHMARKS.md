@@ -22,3 +22,6 @@ From 2026-11-10 on, tok/s is the median of 5 runs. Before that it was one run, a
 | 2026-11-09 | b1a68d2 | Qwen/Qwen3-0.6B | bf16 | AMD Ryzen 7 8845HS w/ Radeon 780M Graphics, 8 threads | 1 | 5 | 20 | 16.0 |
 | 2026-11-09 | b1a68d2 | Qwen/Qwen3-0.6B | bf16 | AMD Ryzen 7 8845HS w/ Radeon 780M Graphics, 8 threads | 16 | 5 | 20 | 146.0 |
 | 2026-11-09 | b1a68d2 | Qwen/Qwen3-0.6B | bf16 | AMD Ryzen 7 8845HS w/ Radeon 780M Graphics, 8 threads | 64 | 5 | 20 | 256.2 |
+| 2026-11-10 | e272b89 | Qwen/Qwen3-0.6B | bf16 | AMD Ryzen 7 8845HS w/ Radeon 780M Graphics, 8 threads | 1 | 5 | 20 | 18.6 |
+| 2026-11-10 | e272b89 | Qwen/Qwen3-0.6B | bf16 | AMD Ryzen 7 8845HS w/ Radeon 780M Graphics, 8 threads | 16 | 5 | 20 | 145.1 |
+| 2026-11-10 | e272b89 | Qwen/Qwen3-0.6B | bf16 | AMD Ryzen 7 8845HS w/ Radeon 780M Graphics, 8 threads | 64 | 5 | 20 | 250.4 |
