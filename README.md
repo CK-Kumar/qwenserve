@@ -5,7 +5,7 @@ you send it a prompt. So I'm building a small one myself, from scratch in
 PyTorch, for Qwen models.
 
 The code is meant to be read. Each idea gets its own small file: the KV cache,
-batching, paged memory, prefix caching. If you're learning how inference works,
+batching, paged memory, the server. If you're learning how inference works,
 you can follow it step by step, the same way I did.
 
 ## Supported models
