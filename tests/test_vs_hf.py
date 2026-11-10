@@ -1,8 +1,11 @@
+import queue
+
 import pytest
 import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
 from qwenserve.config import load_config
+from qwenserve.engine import start
 from qwenserve.loader import load_weights
 from qwenserve.model import add_request, forward, generate, generate_batch, make_engine, step
 
@@ -104,3 +107,22 @@ def test_own_sampling_per_request(setup):
         step(engine)
     assert ra["text"] == generate(a, w, c, 10)
     assert rb["text"] == generate(b, w, c, 10, temperature=0.7, seed=1)
+
+
+def test_engine_survives_a_crash(setup):
+    # top_p=0 crashes sample() (the server's check() stops it, here we skip that)
+    tok, c, w, hf = setup
+    engine = make_engine(w, c, num_pages=10, max_running=2)
+    start(engine)
+
+    def order(top_p):
+        mailbox = queue.Queue()
+        ids = tok(PROMPTS[0]).input_ids
+        engine["rail"].put({"ids": ids, "max_new_tokens": 3, "temperature": 0.7, "top_k": 0, "top_p": top_p, "seed": 1, "mailbox": mailbox})
+        return mailbox
+
+    bad = order(top_p=0)
+    assert isinstance(bad.get(timeout=30), RuntimeError)  # the error comes back, no hang
+    good = order(top_p=1.0)
+    assert [good.get(timeout=30)[1] for _ in range(3)] == [None, None, "length"]  # 3 tokens, then done
+    assert engine["reserved"] == 0 and len(engine["pool"]["free"]) == 10  # all pages back

@@ -1,6 +1,7 @@
 import queue
 import threading
 
+from qwenserve.kv_cache import free
 from qwenserve.model import add_request, step
 
 # Runs step() forever in its own thread. Requests come in through engine["rail"],
@@ -22,9 +23,25 @@ def cook(engine):
         # take the rest that came in meanwhile
         while not rail.empty():
             take(engine, rail.get())
+        try:
+            stepped = step(engine)
+        except Exception as e:
+            # a crash here would kill this thread and every request would hang
+            fail_running(engine, e)
+            continue
         # send each new token right away, for streaming
-        for r in step(engine):
+        for r in stepped:
             r["mailbox"].put((r["text"][-1], r["finish_reason"]))
+
+
+def fail_running(engine, error):
+    # We can't tell which user broke the step, so all of them get the error.
+    for r in engine["running"]:
+        if r["finish_reason"] is None:  # finished ones already gave their pages back
+            free(engine["pool"], r["user"])
+            engine["reserved"] -= r["need"]
+        r["mailbox"].put(error)
+    engine["running"] = []
 
 
 def take(engine, order):
@@ -34,3 +51,4 @@ def take(engine, order):
         order["mailbox"].put(e)  # too long for the pool: send the error back, keep running
         return
     r["mailbox"] = order["mailbox"]
+
