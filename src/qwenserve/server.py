@@ -120,7 +120,14 @@ def submit(body, ids, default_max_tokens):
         # wrong model name, same error as vLLM
         return None, error(f"The model `{body['model']}` does not exist.", "NotFoundError", 404)
     max_new_tokens = body.get("max_tokens", default_max_tokens)
+    # request value, else the model's defaults (like vLLM)
+    temperature = body.get("temperature", c.temperature)
+    top_k = body.get("top_k", c.top_k)
+    top_p = body.get("top_p", c.top_p)
     # check here: once a stream starts it's too late to return a 400
+    bad = check(ids, max_new_tokens, temperature, top_k, top_p)
+    if bad:
+        return None, error(bad, "BadRequestError", 400)
     if pages_needed(ids, max_new_tokens) > num_pages:
         return None, error("this request needs more pages than the whole pool, it would wait forever", "BadRequestError", 400)
     mailbox = queue.Queue()
@@ -128,15 +135,30 @@ def submit(body, ids, default_max_tokens):
         {
             "ids": ids,
             "max_new_tokens": max_new_tokens,
-            # request value, else the model's defaults (like vLLM)
-            "temperature": body.get("temperature", c.temperature),
-            "top_k": body.get("top_k", c.top_k),
-            "top_p": body.get("top_p", c.top_p),
+            "temperature": temperature,
+            "top_k": top_k,
+            "top_p": top_p,
             "seed": body.get("seed"),
             "mailbox": mailbox,
         }
     )
     return mailbox, None
+
+
+def check(ids, max_new_tokens, temperature, top_k, top_p):
+    # A bad value would crash the engine thread and hang everyone, so stop it here.
+    # Returns what is wrong, or None. Same rules as vLLM.
+    if not ids:
+        return "the prompt is empty"
+    if max_new_tokens < 1:
+        return f"max_tokens must be at least 1, got {max_new_tokens}"
+    if temperature < 0:
+        return f"temperature must be 0 or more, got {temperature}"
+    if top_k < 0:
+        return f"top_k must be 0 (no cut) or more, got {top_k}"
+    if not 0 < top_p <= 1:
+        return f"top_p must be more than 0 and at most 1, got {top_p}"
+    return None
 
 
 def tokens(mailbox):

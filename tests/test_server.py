@@ -72,3 +72,17 @@ def test_wrong_model(client):
 def test_too_big(client):
     with pytest.raises(openai.BadRequestError):
         client.chat.completions.create(model=MODEL, messages=CHAT, max_tokens=100_000_000)
+
+
+@pytest.mark.parametrize(
+    "bad",
+    [{"top_p": 0}, {"top_p": 1.5}, {"temperature": -1}, {"max_tokens": 0}, {"prompt": ""}],
+)
+def test_bad_values(client, bad):
+    args = dict(model=MODEL, prompt="The capital of France is", max_tokens=5, temperature=0.7) | bad
+    with pytest.raises(openai.BadRequestError):
+        client.completions.create(**args)
+    # the engine is still alive: a normal request still gets an answer
+    r = client.completions.create(model=MODEL, prompt="The capital of France is", max_tokens=5, temperature=0)
+    assert r.choices[0].text.startswith(" Paris")
+
