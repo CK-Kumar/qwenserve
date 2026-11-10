@@ -67,6 +67,8 @@ print(r.choices[0].message.content)
 Another model or port: `qwenserve --model Qwen/Qwen3-1.7B --port 8001`.
 At start it takes half of the free RAM for the KV cache.
 
+Measure it with many users at once: `uv run python bench_server.py --users 16`
+
 ## How each version is built
 
 1. Add one idea (KV cache, batching, ...).
