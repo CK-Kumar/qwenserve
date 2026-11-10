@@ -1,3 +1,4 @@
+import os
 import socket
 import subprocess
 import sys
@@ -15,14 +16,20 @@ CHAT = [{"role": "user", "content": "What is the capital of France? Just the nam
 
 
 @pytest.fixture(scope="module")
-def client():
+def log(tmp_path_factory):
+    return tmp_path_factory.mktemp("server") / "server.log"  # the server's output, some tests read it
+
+
+@pytest.fixture(scope="module")
+def client(log):
     with socket.socket() as s:  # ask the system for a free port
         s.bind(("127.0.0.1", 0))
         port = s.getsockname()[1]
     server = subprocess.Popen(
         [sys.executable, "-m", "uvicorn", "qwenserve.server:app", "--port", str(port)],
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
+        stdout=open(log, "w"),
+        stderr=subprocess.STDOUT,
+        env=os.environ | {"PYTHONUNBUFFERED": "1"},  # log lines appear right away
     )
     url = f"http://127.0.0.1:{port}/v1"
     for _ in range(120):  # loading the model takes a few seconds
@@ -86,3 +93,14 @@ def test_bad_values(client, bad):
     r = client.completions.create(model=MODEL, prompt="The capital of France is", max_tokens=5, temperature=0)
     assert r.choices[0].text.startswith(" Paris")
 
+
+def test_client_leaves_mid_stream(client, log):
+    # read 3 chunks of a long answer, then hang up: the engine must stop it and free the seat
+    stream = client.completions.create(model=MODEL, prompt="Write a long story about a ship.", max_tokens=500, stream=True)
+    next(stream), next(stream), next(stream)
+    stream.close()
+    for _ in range(50):
+        if "cancelled" in log.read_text():
+            break
+        time.sleep(0.1)
+    assert "cancelled" in log.read_text()

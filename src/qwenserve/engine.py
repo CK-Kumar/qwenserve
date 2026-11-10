@@ -45,6 +45,9 @@ def fail_running(engine, error):
 
 
 def take(engine, order):
+    if "cancel" in order:
+        cancel(engine, order["cancel"])
+        return
     try:
         r = add_request(engine, order["ids"], order["max_new_tokens"], order["temperature"], order["top_k"], order["top_p"], order["seed"])
     except ValueError as e:
@@ -52,3 +55,22 @@ def take(engine, order):
         return
     r["mailbox"] = order["mailbox"]
 
+
+def cancel(engine, mailbox):
+    # The client left: stop their request and give back their seat and pages.
+    # The mailbox tells us which request it is. Already finished: nothing to do.
+    left = ConnectionAbortedError("client left")
+    for r in engine["waiting"]:
+        if r["mailbox"] is mailbox:
+            engine["waiting"].remove(r)
+            mailbox.put(left)  # wakes the web thread still waiting on this mailbox
+            return
+    for r in engine["running"]:
+        if r["mailbox"] is mailbox:
+            free(engine["pool"], r["user"])
+            engine["reserved"] -= r["need"]
+            engine["running"].remove(r)
+            mailbox.put(left)
+            if engine["log"]:
+                print(f"step {engine['step']}: user {r['id']} cancelled ({len(r['text']) - len(r['prompt'])} new tokens)")
+            return

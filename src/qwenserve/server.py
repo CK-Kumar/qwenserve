@@ -7,6 +7,7 @@ import uuid
 from fastapi import FastAPI
 from fastapi.responses import JSONResponse, StreamingResponse
 from huggingface_hub.errors import RepositoryNotFoundError
+from starlette.background import BackgroundTask
 from tokenizers import Tokenizer
 
 from qwenserve.chat import chat_prompt, new_text
@@ -72,7 +73,7 @@ def chat_completions(body: dict):
                 yield sse({"id": rid, "object": "chat.completion.chunk", "created": int(time.time()), "model": MODEL, "choices": [], "usage": usage(ids, n)})
             yield "data: [DONE]\n\n"
 
-        return StreamingResponse(events(), media_type="text/event-stream")
+        return StreamingResponse(events(), media_type="text/event-stream", background=cancel_task(mailbox))
 
     new, finish_reason = collect(mailbox)
     return {
@@ -105,7 +106,7 @@ def completions(body: dict):
                 yield sse({"id": rid, "object": "text_completion", "created": int(time.time()), "model": MODEL, "choices": [], "usage": usage(ids, n)})
             yield "data: [DONE]\n\n"
 
-        return StreamingResponse(events(), media_type="text/event-stream")
+        return StreamingResponse(events(), media_type="text/event-stream", background=cancel_task(mailbox))
 
     new, finish_reason = collect(mailbox)
     chunk = completion_chunk(rid, tok.decode(new, skip_special_tokens=True), finish_reason)
@@ -159,6 +160,12 @@ def check(ids, max_new_tokens, temperature, top_k, top_p):
     if not 0 < top_p <= 1:
         return f"top_p must be more than 0 and at most 1, got {top_p}"
     return None
+
+
+def cancel_task(mailbox):
+    # Runs after a stream ends, also when the client left halfway.
+    # Tells the engine to drop the request and free its seat (no-op if it already finished).
+    return BackgroundTask(engine["rail"].put, {"cancel": mailbox})
 
 
 def tokens(mailbox):
