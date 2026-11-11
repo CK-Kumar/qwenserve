@@ -2,6 +2,8 @@
 name = "qwenserve"
 version = "0.4.1"
 description = "qwenserve is a study project created as a simple inference engine to serve Qwen models."
+license = "MIT"
+license-files = ["LICENSE"]
 requires-python = ">=3.11"
 dependencies = [
     "fastapi>=0.162.2",
