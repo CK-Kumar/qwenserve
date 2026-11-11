@@ -83,7 +83,7 @@ def test_too_big(client):
 
 @pytest.mark.parametrize(
     "bad",
-    [{"top_p": 0}, {"top_p": 1.5}, {"temperature": -1}, {"max_tokens": 0}, {"prompt": ""}],
+    [{"top_p": 0}, {"top_p": 1.5}, {"temperature": -1}, {"max_tokens": 0}, {"prompt": ""}, {"max_tokens": "abc"}],
 )
 def test_bad_values(client, bad):
     args = dict(model=MODEL, prompt="The capital of France is", max_tokens=5, temperature=0.7) | bad

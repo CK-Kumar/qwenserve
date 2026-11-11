@@ -5,6 +5,7 @@ import time
 import uuid
 
 from fastapi import FastAPI
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, StreamingResponse
 from huggingface_hub.errors import RepositoryNotFoundError
 from starlette.background import BackgroundTask
@@ -16,6 +17,7 @@ from qwenserve.engine import start
 from qwenserve.kv_cache import PAGE, page_bytes, pages_from_memory
 from qwenserve.loader import load_weights
 from qwenserve.model import make_engine, pages_needed
+from qwenserve.schemas import ChatRequest, CompletionRequest
 
 # OpenAI-style server: /v1/models, /v1/chat/completions, /v1/completions.
 #   qwenserve --model Qwen/Qwen3-1.7B   (see cli.py)
@@ -46,6 +48,14 @@ start(engine)
 app = FastAPI()
 
 
+@app.exception_handler(RequestValidationError)
+async def bad_body(request, exc):
+    # FastAPI answers a wrong type with 422 in its own shape, OpenAI clients expect 400 {"error": ...}
+    e = exc.errors()[0]
+    where = ".".join(str(x) for x in e["loc"])  # e.g. body.max_tokens
+    return error(f"{where}: {e['msg']}", "BadRequestError", 400)
+
+
 @app.get("/v1/models")
 async def models():
     # clients call this first to get the model name
@@ -53,23 +63,23 @@ async def models():
 
 
 @app.post("/v1/chat/completions")
-def chat_completions(body: dict):
+def chat_completions(body: ChatRequest):
     # plain def, not async: FastAPI runs it in its own thread, so it can wait on the mailbox
     # body is the request JSON, e.g. {"messages": [...], "max_tokens": 100}
-    ids = tok.encode(chat_prompt(body["messages"])).ids
-    mailbox, err = submit(body, ids, default_max_tokens=256)
+    ids = tok.encode(chat_prompt(body.messages)).ids
+    mailbox, err = submit(body, ids)
     if err:
         return err
     rid = f"chatcmpl-{uuid.uuid4().hex}"
 
-    if body.get("stream"):
+    if body.stream:
 
         def events():
             yield sse(chat_chunk(rid, {"role": "assistant", "content": ""}, None))  # first chunk only has the role
             for piece, finish_reason, n in pieces(mailbox):
                 if piece or finish_reason:
                     yield sse(chat_chunk(rid, {"content": piece} if piece else {}, finish_reason))
-            if body.get("stream_options", {}).get("include_usage"):
+            if (body.stream_options or {}).get("include_usage"):
                 yield sse({"id": rid, "object": "chat.completion.chunk", "created": int(time.time()), "model": MODEL, "choices": [], "usage": usage(ids, n)})
             yield "data: [DONE]\n\n"
 
@@ -87,22 +97,22 @@ def chat_completions(body: dict):
 
 
 @app.post("/v1/completions")
-def completions(body: dict):
+def completions(body: CompletionRequest):
     # no chat template, the model just continues the prompt
     # body e.g. {"prompt": "The capital of France is", "max_tokens": 5}
-    ids = tok.encode(body["prompt"]).ids
-    mailbox, err = submit(body, ids, default_max_tokens=16)  # 16 is the OpenAI default
+    ids = tok.encode(body.prompt).ids
+    mailbox, err = submit(body, ids)
     if err:
         return err
     rid = f"cmpl-{uuid.uuid4().hex}"
 
-    if body.get("stream"):
+    if body.stream:
 
         def events():
             for piece, finish_reason, n in pieces(mailbox):
                 if piece or finish_reason:
                     yield sse(completion_chunk(rid, piece, finish_reason))
-            if body.get("stream_options", {}).get("include_usage"):
+            if (body.stream_options or {}).get("include_usage"):
                 yield sse({"id": rid, "object": "text_completion", "created": int(time.time()), "model": MODEL, "choices": [], "usage": usage(ids, n)})
             yield "data: [DONE]\n\n"
 
@@ -114,17 +124,17 @@ def completions(body: dict):
     return chunk
 
 
-def submit(body, ids, default_max_tokens):
+def submit(body, ids):
     # Checks the request and sends it to the engine.
     # Returns (mailbox, None) or (None, error).
-    if body.get("model", MODEL) != MODEL:
+    if body.model is not None and body.model != MODEL:
         # wrong model name, same error as vLLM
-        return None, error(f"The model `{body['model']}` does not exist.", "NotFoundError", 404)
-    max_new_tokens = body.get("max_tokens", default_max_tokens)
+        return None, error(f"The model `{body.model}` does not exist.", "NotFoundError", 404)
+    max_new_tokens = body.max_tokens
     # request value, else the model's defaults (like vLLM)
-    temperature = body.get("temperature", c.temperature)
-    top_k = body.get("top_k", c.top_k)
-    top_p = body.get("top_p", c.top_p)
+    temperature = c.temperature if body.temperature is None else body.temperature
+    top_k = c.top_k if body.top_k is None else body.top_k
+    top_p = c.top_p if body.top_p is None else body.top_p
     # check here: once a stream starts it's too late to return a 400
     bad = check(ids, max_new_tokens, temperature, top_k, top_p)
     if bad:
@@ -139,7 +149,7 @@ def submit(body, ids, default_max_tokens):
             "temperature": temperature,
             "top_k": top_k,
             "top_p": top_p,
-            "seed": body.get("seed"),
+            "seed": body.seed,
             "mailbox": mailbox,
         }
     )
